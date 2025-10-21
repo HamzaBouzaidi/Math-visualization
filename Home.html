@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FDM vs FVM — Visualization</title>
+    <style>
+        :root{
+            --bg: #0f1724;
+            --panel: #0b1220;
+            --card: #0f1728;
+            --accent: #38bdf8;
+            --muted: #9aa6b2;
+            --cell: #1e293b;
+            --cell-edge: #334155;
+            --point: #f97316;
+            --flux: #10b981;
+            --font: "Segoe UI", Roboto, Arial, sans-serif;
+        }
+        body{
+            margin:0;
+            min-height:100vh;
+            background:linear-gradient(180deg,#071022,#081426 60%);
+            color:white;
+            font-family:var(--font);
+            display:flex;
+            gap:18px;
+            align-items:flex-start;
+            padding:24px;
+            box-sizing:border-box;
+        }
+        .container{
+            display:flex;
+            gap:16px;
+            width:100%;
+        }
+        .panel{
+            background:rgba(255,255,255,0.03);
+            border:1px solid rgba(255,255,255,0.04);
+            border-radius:10px;
+            padding:12px;
+            box-sizing:border-box;
+            flex:1;
+            min-width:320px;
+        }
+        header{
+            display:flex;
+            gap:12px;
+            align-items:center;
+            margin-bottom:8px;
+        }
+        h2{margin:0;font-size:18px}
+        .controls{
+            display:flex;
+            gap:8px;
+            align-items:center;
+            margin-bottom:12px;
+            flex-wrap:wrap;
+        }
+        label{
+            font-size:13px;
+            color:var(--muted);
+            display:flex;
+            gap:6px;
+            align-items:center;
+        }
+        input[type="range"]{width:150px;}
+        button{
+            background:var(--accent);
+            color:#022;
+            border:none;
+            padding:8px 12px;
+            border-radius:8px;
+            font-weight:600;
+            cursor:pointer;
+        }
+        .canvas-wrap{
+            background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+            border-radius:8px;
+            padding:8px;
+            display:flex;
+            justify-content:center;
+            align-items:center;
+        }
+        canvas{ background: linear-gradient(180deg,#041022,#081124); border-radius:6px; display:block; }
+        .legend{
+            margin-top:8px;
+            font-size:13px;
+            color:var(--muted);
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+        }
+        .legend b{color:white}
+        footer{margin-top:12px; font-size:13px; color:var(--muted)}
+        .row {display:flex; gap:12px; align-items:center;}
+        .toggle{display:inline-flex; gap:8px; align-items:center;}
+        .small {font-size:13px; color:var(--muted)}
+        .note {margin-top:8px; font-size:13px; color:var(--muted)}
+        @media (max-width:900px){
+            body{padding:12px}
+            .container{flex-direction:column}
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="panel" id="fdm-panel">
+        <header>
+            <h2>Finite Difference Method (FDM) — Nodes / Points</h2>
+        </header>
+
+        <div class="controls">
+            <label class="small">Grid points: <span id="fdm-n-label">11</span>
+                <input id="fdm-range" type="range" min="5" max="41" step="2" value="11">
+            </label>
+
+            <label class="small toggle">
+                <input id="fdm-show-lines" type="checkbox" checked> Connect neighbors
+            </label>
+
+            <label class="small toggle">
+                <input id="fdm-animate" type="checkbox"> Animate scalar
+            </label>
+
+            <button id="fdm-reset">Reset</button>
+        </div>
+
+        <div class="canvas-wrap">
+            <canvas id="fdm-canvas" width="760" height="220"></canvas>
+        </div>
+
+        <div class="legend">
+            <div><span style="color:var(--point)">●</span> <b>Node</b> — value stored at a point</div>
+            <div><span style="color:var(--accent)">—</span> <b>Difference</b> — neighbor comparison</div>
+            <div><span style="color:var(--muted)">(1D view)</span></div>
+        </div>
+
+        <div class="note">
+            FDM stores values at **points** and uses differences between neighboring points to estimate derivatives (good for smooth fields).
+        </div>
+    </div>
+
+    <div class="panel" id="fvm-panel">
+        <header>
+            <h2>Finite Volume Method (FVM) — Cells / Control Volumes</h2>
+        </header>
+
+        <div class="controls">
+            <label class="small">Cells: <span id="fvm-n-label">5</span>
+                <input id="fvm-range" type="range" min="3" max="21" step="1" value="5">
+            </label>
+
+            <label class="small toggle">
+                <input id="fvm-show-flux" type="checkbox" checked> Show flux arrows
+            </label>
+
+            <label class="small toggle">
+                <input id="fvm-animate" type="checkbox"> Animate scalar
+            </label>
+
+            <button id="fvm-reset">Reset</button>
+        </div>
+
+        <div class="canvas-wrap">
+            <canvas id="fvm-canvas" width="760" height="220"></canvas>
+        </div>
+
+        <div class="legend">
+            <div><span style="background:var(--cell);padding:6px;border-radius:3px;border:1px solid var(--cell-edge)"></span> <b>Cell</b> — average stored</div>
+            <div><span style="color:var(--flux)">→</span> <b>Flux</b> — flow across faces</div>
+            <div class="small">(1D control volumes)</div>
+        </div>
+
+        <div class="note">
+            FVM stores **average values in cells** and updates them by computing net fluxes through cell faces — ensures conservation.
+        </div>
+    </div>
+</div>
+
+<script>
+    /* -------------------------
+       Utility & drawing helpers
+       ------------------------- */
+    function clear(ctx,w,h){
+        ctx.clearRect(0,0,w,h);
+    }
+    function drawRoundedRect(ctx,x,y,w,h,r,fill,stroke){
+        ctx.beginPath();
+        ctx.moveTo(x+r,y);
+        ctx.arcTo(x+w,y,x+w,y+h,r);
+        ctx.arcTo(x+w,y+h,x,y+h,r);
+        ctx.arcTo(x,y+h,x,y,r);
+        ctx.arcTo(x,y,x+w,y,r);
+        ctx.closePath();
+        if(fill){ ctx.fillStyle = fill; ctx.fill(); }
+        if(stroke){ ctx.strokeStyle = stroke; ctx.stroke(); }
+    }
+
+    /* -------------------------
+       FDM: nodes + simple animation
+       ------------------------- */
+    const fdmCanvas = document.getElementById('fdm-canvas');
+    const fdmCtx = fdmCanvas.getContext('2d');
+    const fdmRange = document.getElementById('fdm-range');
+    const fdmNLabel = document.getElementById('fdm-n-label');
+    const fdmShowLines = document.getElementById('fdm-show-lines');
+    const fdmAnimateBox = document.getElementById('fdm-animate');
+    const fdmReset = document.getElementById('fdm-reset');
+
+    let fdmN = parseInt(fdmRange.value);
+    let fdmAnimate = false;
+    let fdmPhase = 0;
+
+    function drawFDM(){
+        const W = fdmCanvas.width, H = fdmCanvas.height;
+        clear(fdmCtx,W,H);
+        // background band
+        drawRoundedRect(fdmCtx,6,6,W-12,H-12,8,null,'rgba(255,255,255,0.03)');
+        // draw line axis
+        const left = 40, right = W-40, y = H/2;
+        fdmCtx.strokeStyle = 'rgba(255,255,255,0.06)';
+        fdmCtx.lineWidth = 2;
+        fdmCtx.beginPath(); fdmCtx.moveTo(left,y); fdmCtx.lineTo(right,y); fdmCtx.stroke();
+
+        // points
+        let xs = [];
+        for(let i=0;i<fdmN;i++){
+            const t = i/(fdmN-1);
+            const x = left + t*(right-left);
+            xs.push(x);
+        }
+
+        // optional connecting lines
+        if(fdmShowLines.checked){
+            fdmCtx.strokeStyle = '#60a5fa';
+            fdmCtx.lineWidth = 1.5;
+            fdmCtx.beginPath();
+            for(let i=0;i<xs.length;i++){
+                const a = xs[i], b = y + Math.sin((i/Math.max(1,fdmN-1))*Math.PI*2 + fdmPhase)*10;
+                if(i===0) fdmCtx.moveTo(a,b); else fdmCtx.lineTo(a,b);
+            }
+            fdmCtx.stroke();
+        }
+
+        // draw nodes (colored by a simple wave value)
+        for(let i=0;i<xs.length;i++){
+            const x = xs[i];
+            const wave = Math.sin((i/(fdmN-1))*Math.PI*2 + fdmPhase);
+            const r = 7 + 3*wave;
+            fdmCtx.beginPath();
+            fdmCtx.arc(x,y, r,0,Math.PI*2);
+            // fill color depending on wave
+            const val = Math.round(128 + 127*wave);
+            fdmCtx.fillStyle = `rgb(${255-val},${120+val/2},${val})`;
+            fdmCtx.fill();
+            fdmCtx.strokeStyle = '#0b1220';
+            fdmCtx.lineWidth = 1;
+            fdmCtx.stroke();
+
+            // small outline point
+            fdmCtx.beginPath();
+            fdmCtx.arc(x,y,2,0,Math.PI*2);
+            fdmCtx.fillStyle = 'white';
+            fdmCtx.fill();
+        }
+
+        // labels
+        fdmCtx.fillStyle = 'rgba(255,255,255,0.6)';
+        fdmCtx.font = '12px Arial';
+        fdmCtx.fillText('Points (nodes) store values', left, 24);
+    }
+
+    /* -------------------------
+       FVM: cells + flux arrows
+       ------------------------- */
+    const fvmCanvas = document.getElementById('fvm-canvas');
+    const fvmCtx = fvmCanvas.getContext('2d');
+    const fvmRange = document.getElementById('fvm-range');
+    const fvmNLabel = document.getElementById('fvm-n-label');
+    const fvmShowFlux = document.getElementById('fvm-show-flux');
+    const fvmAnimateBox = document.getElementById('fvm-animate');
+    const fvmReset = document.getElementById('fvm-reset');
+
+    let fvmCells = parseInt(fvmRange.value);
+    let fvmAnimate = false;
+    let fvmPhase2 = 0;
+
+    function drawFVM(){
+        const W = fvmCanvas.width, H = fvmCanvas.height;
+        clear(fvmCtx,W,H);
+        drawRoundedRect(fvmCtx,6,6,W-12,H-12,8,null,'rgba(255,255,255,0.03)');
+
+        const left = 40, right = W-40, yTop = 40, yBot = H-40;
+        const totalWidth = right-left;
+        const cellW = totalWidth / fvmCells;
+
+        // draw cells
+        for(let i=0;i<fvmCells;i++){
+            const x0 = left + i*cellW;
+            const x1 = x0 + cellW;
+            // cell fill
+            const avg = Math.sin((i/(Math.max(1,fvmCells-1)))*Math.PI*2 + fvmPhase2);
+            const shade = Math.round(200 - 80*avg);
+            fvmCtx.fillStyle = `rgba(${shade},${shade},${shade},0.12)`;
+            fvmCtx.fillRect(x0, yTop, cellW, yBot - yTop);
+            // edges
+            fvmCtx.strokeStyle = 'rgba(255,255,255,0.06)';
+            fvmCtx.strokeRect(x0, yTop, cellW, yBot - yTop);
+
+            // cell center marker
+            const cx = x0 + cellW/2;
+            const cy = (yTop+yBot)/2;
+            fvmCtx.beginPath();
+            fvmCtx.arc(cx,cy,6,0,Math.PI*2);
+            fvmCtx.fillStyle = '#fb7185';
+            fvmCtx.fill();
+            fvmCtx.strokeStyle = '#0b1220'; fvmCtx.stroke();
+
+            // label small average value
+            fvmCtx.fillStyle = 'rgba(255,255,255,0.8)';
+            fvmCtx.font = '11px Arial';
+            fvmCtx.fillText((avg.toFixed(2)), cx-14, cy+20);
+
+            // flux arrows at faces (optional)
+            if(fvmShowFlux.checked){
+                // left face arrow (if not first cell)
+                if(i>0){
+                    const fx = x0 + 0;
+                    const fy = cy;
+                    // compute arrow length from difference of "avg"
+                    const leftAvg = Math.sin(((i-1)/(Math.max(1,fvmCells-1)))*Math.PI*2 + fvmPhase2);
+                    const flux = (avg - leftAvg);
+                    const dir = flux>0 ? 1 : -1;
+                    const len = Math.min(30, Math.abs(flux)*50);
+                    // draw arrow pointing to left or right
+                    drawArrow(fvmCtx, fx+ (dir>0?2:-2), fy, fx + (dir>0?2+len:-2-len), fy, dir>0 ? '#34d399' : '#60a5fa');
+                }
+                // right face arrow (if not last)
+                if(i < fvmCells-1){
+                    const fx = x1;
+                    const fy = cy;
+                    const rightAvg = Math.sin(((i+1)/(Math.max(1,fvmCells-1)))*Math.PI*2 + fvmPhase2);
+                    const flux = (rightAvg - avg);
+                    const dir = flux>0 ? 1 : -1;
+                    const len = Math.min(30, Math.abs(flux)*50);
+                    drawArrow(fvmCtx, fx+ (dir>0?2:-2), fy, fx + (dir>0?2+len:-2-len), fy, dir>0 ? '#34d399' : '#60a5fa');
+                }
+            }
+        }
+
+        fvmCtx.fillStyle = 'rgba(255,255,255,0.6)';
+        fvmCtx.font = '12px Arial';
+        fvmCtx.fillText('Cells hold averages and update using fluxes across faces', left, 24);
+    }
+
+    function drawArrow(ctx,x1,y1,x2,y2,color){
+        const head = 6;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x1,y1);
+        ctx.lineTo(x2,y2);
+        ctx.stroke();
+        // arrowhead
+        const angle = Math.atan2(y2-y1, x2-x1);
+        ctx.beginPath();
+        ctx.moveTo(x2,y2);
+        ctx.lineTo(x2 - head*Math.cos(angle - Math.PI/6), y2 - head*Math.sin(angle - Math.PI/6));
+        ctx.lineTo(x2 - head*Math.cos(angle + Math.PI/6), y2 - head*Math.sin(angle + Math.PI/6));
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    /* -------------------------
+       UI interactions
+       ------------------------- */
+    fdmRange.addEventListener('input', ()=>{
+        fdmN = parseInt(fdmRange.value);
+        fdmNLabel.textContent = fdmN;
+        drawFDM();
+    });
+    fdmShowLines.addEventListener('change', drawFDM);
+    fdmAnimateBox.addEventListener('change', ()=>{
+        fdmAnimate = fdmAnimateBox.checked;
+    });
+    fdmReset.addEventListener('click', ()=>{
+        fdmRange.value = 11; fdmN = 11; fdmNLabel.textContent = 11;
+        fdmShowLines.checked = true;
+        fdmAnimateBox.checked = false;
+        fdmAnimate = false;
+        fdmPhase = 0;
+        drawFDM();
+    });
+
+    fvmRange.addEventListener('input', ()=>{
+        fvmCells = parseInt(fvmRange.value);
+        fvmNLabel.textContent = fvmCells;
+        drawFVM();
+    });
+    fvmShowFlux.addEventListener('change', drawFVM);
+    fvmAnimateBox.addEventListener('change', ()=>{ fvmAnimate = fvmAnimateBox.checked; });
+    fvmReset.addEventListener('click', ()=>{
+        fvmRange.value = 5; fvmCells = 5; fvmNLabel.textContent = 5;
+        fvmShowFlux.checked = true;
+        fvmAnimateBox.checked = false;
+        fvmAnimate = false;
+        fvmPhase2 = 0;
+        drawFVM();
+    });
+
+    /* -------------------------
+       Animation loop
+       ------------------------- */
+    function loop(){
+        if(fdmAnimate){
+            fdmPhase += 0.08;
+        }
+        if(fvmAnimate){
+            fvmPhase2 += 0.06;
+        }
+        drawFDM();
+        drawFVM();
+        requestAnimationFrame(loop);
+    }
+
+    drawFDM();
+    drawFVM();
+    requestAnimationFrame(loop);
+
+    /* -------------------------
+       Helpful: allow canvas to resize nicely if needed
+       ------------------------- */
+    function resizeCanvases(){
+        // keep pixel ratio crisp
+        const ratio = window.devicePixelRatio || 1;
+        [fdmCanvas, fvmCanvas].forEach(c=>{
+            const styleW = c.clientWidth;
+            const styleH = c.clientHeight;
+            c.width = Math.floor(styleW * ratio);
+            c.height = Math.floor(styleH * ratio);
+            const ctx = c.getContext('2d');
+            ctx.setTransform(ratio,0,0,ratio,0,0);
+        });
+        drawFDM(); drawFVM();
+    }
+    window.addEventListener('resize', ()=>{ /* no-op for now */ }, {passive:true});
+</script>
+</body>
+</html>
